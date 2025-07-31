@@ -1,60 +1,59 @@
-import requests
-import json
-from typing import Dict, Any, Optional
-
-"""
-{"verbose":true,"locations":[{"lat":42.358528,"lon":-83.271400},{"lat":42.996613,"lon":-78.749855}],"costing":"bicycle","costing_options":{"bicycle":{"bicycle_type":"road"}},"directions_options":{"units":"miles"},"id":"12abc3afe23984fe"}
-"""
+from typing import List, TypedDict, Any
+from urllib.parse import urlencode
+import aiohttp
+import asyncio
 
 
-def post_lat_lon(
-    url: str,
-    json_data: Dict[str, Any],
-    headers: Optional[Dict[str, str]] = None,
-    timeout: int = 10,
-) -> requests.Response:
-    default_headers = {"Content-Type": "application/json"}
-    if headers:
-        default_headers.update(headers)
+class Coordinate(TypedDict):
+    lat: float
+    lon: float
 
+
+# Sample data
+coordinates: list[Coordinate] = [
+    {"lat": 29.819211, "lon": -95.420002},
+    {"lat": 29.818516, "lon": -95.420425},
+]
+
+# Additional params
+params: dict[str, str] = {"format": "json", "zoom": 10}
+
+
+async def fetch_json(session: aiohttp.ClientSession, url: str) -> Any:
     try:
-        response = requests.post(
-            url,
-            json=json_data,  # automatically serialize to JSON
-            headers=default_headers,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Request failed: {e}")
-        raise
+        async with session.get(url) as response:
+            response.raise_for_status()  # raise for HTTP errors
+            return await response.json()
+    except Exception as e:
+        print(f"Failed to fetch {url}: {e}")
+        return None
 
 
-def get_street_name(gps: Dict[str, Any]) -> Dict[str, Any]:
-    url = "http://localhost:8002/locate"
-    response = post_lat_lon(url, gps)
-    
-    street_names: List[str] = []
-    
-    for item in response:
-        for edge in item.get("edges", []):
-            names = edge.get("edge_info", {}).get("names", [])
-            street_names.extend(names)
-
-    unique_streets = list(set(street_names))
-    return {"streets": unique_streets}
+async def fetch_all(urls: list[str]) -> list[Any]:
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_json(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
 
 
+def build_reverse_geocode_urls(
+    coords: list[Coordinate], params: dict[str, str]
+) -> List[str]:
+    base_url = "https://nominatim.openstreetmap.org/reverse"
+    urls: list[str] = []
 
-gps = {
-    "verbose": True,
-    "locations": [{"lat": 29.750022, "lon": -95.373868}],
-    #"costing": "bicycle",
-    #"costing_options": {"bicycle": {"bicycle_type": "road"}},
-    "directions_options": {"units": "feet"},
-    "id": "testID",
-}
+    for coord in coords:
+        query_params = {**coord, **params}  # merge coord and param
+        query_string = urlencode(query_params)
+        url = f"{base_url}?{query_string}"
+        urls.append(url)
 
-response_data = get_street_name(gps)
-print(json.dumps(response_data, indent=2))
+    return urls
+
+
+urls = build_reverse_geocode_urls(coordinates, params)
+
+if __name__ == "__main__":
+    results: list[str] = asyncio.run(fetch_all(urls))
+    for url, data in zip(urls, results):
+        print(f"\n--- JSON response from {url} ---")
+        print(data)
